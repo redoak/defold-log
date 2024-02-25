@@ -18,12 +18,12 @@ local INFO_BLOCK_LENGTH = sys.get_config_int("log.info_block_length", 18)
 
 local LOGGER_PREFIX = ""
 if IS_TIME_TRACK then
-	LOGGER_PREFIX = LOGGER_PREFIX .. "%difftimems "
-	INFO_BLOCK_LENGTH = INFO_BLOCK_LENGTH + 9
+	LOGGER_PREFIX = LOGGER_PREFIX .. "%difftimens "
+	INFO_BLOCK_LENGTH = INFO_BLOCK_LENGTH + 18
 end
 if IS_MEMORY_TRACK then
-	LOGGER_PREFIX = LOGGER_PREFIX .. "%diffmemkb "
-	INFO_BLOCK_LENGTH = INFO_BLOCK_LENGTH + 7
+	LOGGER_PREFIX = LOGGER_PREFIX .. "%diffmemB "
+	INFO_BLOCK_LENGTH = INFO_BLOCK_LENGTH + 13
 end
 
 local INFO_BLOCK_DEFAULT = "%levelshort[%logger"
@@ -109,6 +109,33 @@ local function table_to_string(t, depth, result)
 	return result .. "}"
 end
 
+local function format_memory(memory)
+	local format
+	if memory < 1000 then
+		format = "%c%c %c%c%c %c%c%c"
+	elseif memory < 1000000 then
+		format = "%c%c %c%c%c,%c%c%c"
+	else
+		if memory >= 100000000 then print("memory value does not fit buffer!") end
+		format = "%c%c,%c%c%c,%c%c%c"
+	end
+	return string.format(format, string_m.byte(string.format("%8d", memory), 1, 8))
+end
+
+local function format_time(ns)
+	local format
+	if ns < 1000 then
+		format = "%c%c %c%c%c %c%c%c %c%c%c"
+	elseif ns < 1000000 then
+		format = "%c%c %c%c%c %c%c%c,%c%c%c"
+	elseif ns < 1000000000 then
+		format = "%c%c %c%c%c,%c%c%c,%c%c%c"
+	else
+		if ns >= 100000000000 then print("time value does not fit buffer!") end
+		format = "%c%c,%c%c%c,%c%c%c,%c%c%c"
+	end
+	return string.format(format, string_m.byte(string.format("%11d", ns), 1, 11))
+end
 
 local Logger = {}
 
@@ -121,22 +148,21 @@ function Logger:format(level, message, context)
 	local string_info_block = level == ERROR and INFO_BLOCK_RAW or INFO_BLOCK
 	if IS_FORMAT_DIFFMEM then
 		local current_memory = collectgarbage("count")
-		self._last_gc_memory = self._last_gc_memory or current_memory
-		local diff_memory = math.max(current_memory - self._last_gc_memory, 0)
-
-		string_info_block = string_m.gsub(string_info_block, "%%diffmem", string.format("%04.1f", diff_memory))
+		local diff_memory = current_memory - self._last_gc_memory
+		if diff_memory < 0 then
+			string_info_block = string_m.gsub(string_info_block, "%%diffmem", string.rep(" ", 9) .. "?")
+		else
+			string_info_block = string_m.gsub(string_info_block, "%%diffmem", format_memory(diff_memory * 1024))
+		end
 	end
 	if IS_FORMAT_LOGGER then
 		string_info_block = string_m.gsub(string_info_block, "%%logger", self.name)
 	end
 	if IS_FORMAT_DIFFTIME then
-		-- Debug time tracking (in ms)
-		local current_time = socket.gettime()
-		self._last_message_time = self._last_message_time or current_time
-		local diff_time = math.floor((current_time - self._last_message_time) * 1000000) / 1000
+		local current_time = chronos.time()
+		local diff_time = current_time - self._last_message_time
 		self._last_message_time = current_time
-
-		string_info_block = string_m.gsub(string_info_block, "%%difftime", string.format("%06.2f", diff_time))
+		string_info_block = string_m.gsub(string_info_block, "%%difftime", format_time(math.floor(diff_time * 1000000000)))
 	end
 	if IS_FORMAT_LEVEL_SHORT then
 		string_info_block = string_m.gsub(string_info_block, "%%levelshort", LEVEL_SHORT_NAME[level])
@@ -255,6 +281,12 @@ function Log.get_logger(logger_name, force_logger_level_in_debug)
 		name = logger_name or "",
 		level = force_logger_level_in_debug or GAME_LOG_LEVEL,
 	}
+	if IS_FORMAT_DIFFMEM then
+		instance._last_gc_memory = collectgarbage("count")
+	end
+	if IS_FORMAT_DIFFTIME then
+		instance._last_message_time = chronos.time()
+	end
 
 	if not IS_DEBUG then
 		if LEVEL_PRIORITY[instance.level] < LEVEL_PRIORITY[GAME_LOG_LEVEL] then
